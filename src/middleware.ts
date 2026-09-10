@@ -19,6 +19,16 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/forgot-password') ||
     pathname.startsWith('/auth/');
 
+  // If supabase is not initialized (missing env vars), allow viewing public pages without crashing
+  if (!supabase) {
+    if (!isPublic) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/login';
+      return NextResponse.redirect(url);
+    }
+    return supabaseResponse;
+  }
+
   // If not authenticated and trying to access protected area → login
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
