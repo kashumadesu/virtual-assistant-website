@@ -21,31 +21,34 @@ export async function POST(request: NextRequest) {
         userAgent,
       });
     } else {
-      // For failed logins we can't associate a userId easily.
-      // Log against the admin account as a system record.
-      const adminClient = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!,
-        { cookies: { getAll: () => [], setAll: () => {} } }
-      );
-      const { data } = await adminClient
-        .from('profiles')
-        .select('id')
-        .eq('role', 'admin')
-        .limit(1)
-        .single();
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-      if (data?.id) {
-        await recordActivity({
-          userId: data.id,
-          action: ACTIONS.FAILED_LOGIN,
-          module: MODULES.AUTH,
-          description: `Failed login attempt for ${email}`,
-          status: 'failed',
-          ipAddress: ip,
-          userAgent,
-          metadata: { attempted_email: email },
-        });
+      if (supabaseUrl && serviceRoleKey) {
+        const adminClient = createServerClient(
+          supabaseUrl,
+          serviceRoleKey,
+          { cookies: { getAll: () => [], setAll: () => {} } }
+        );
+        const { data } = await adminClient
+          .from('profiles')
+          .select('id')
+          .eq('role', 'admin')
+          .limit(1)
+          .single();
+
+        if (data?.id) {
+          await recordActivity({
+            userId: data.id,
+            action: ACTIONS.FAILED_LOGIN,
+            module: MODULES.AUTH,
+            description: `Failed login attempt for ${email}`,
+            status: 'failed',
+            ipAddress: ip,
+            userAgent,
+            metadata: { attempted_email: email },
+          });
+        }
       }
     }
 

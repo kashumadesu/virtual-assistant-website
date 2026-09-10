@@ -20,19 +20,27 @@ export default async function AdminUsersPage() {
 
   const supabase = await createClient();
 
-  const adminClient = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} } }
-  );
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  const [profilesResult, authUsersResult] = await Promise.all([
-    supabase.from('profiles').select('*').order('created_at', { ascending: false }),
-    adminClient.auth.admin.listUsers(),
-  ]);
+  let authUsers: Array<{ id: string; email?: string }> = [];
 
+  if (supabaseUrl && serviceRoleKey) {
+    try {
+      const adminClient = createServerClient(
+        supabaseUrl,
+        serviceRoleKey,
+        { cookies: { getAll: () => [], setAll: () => {} } }
+      );
+      const authUsersResult = await adminClient.auth.admin.listUsers();
+      authUsers = authUsersResult.data?.users ?? [];
+    } catch (e) {
+      console.error('[AdminUsersPage] Error fetching auth users:', e);
+    }
+  }
+
+  const profilesResult = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
   const profiles = (profilesResult.data ?? []) as Profile[];
-  const authUsers = authUsersResult.data?.users ?? [];
 
   const usersWithEmail = profiles.map((p) => ({
     ...p,
