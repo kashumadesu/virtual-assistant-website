@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 
@@ -23,44 +22,27 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      const supabase = createClient();
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+        }),
       });
 
-      if (authError || !data.user) {
-        setError('Invalid email or password. Please try again.');
-        await fetch('/api/auth/login-log', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email.trim(), success: false }),
-        });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Invalid email or password. Please try again.');
         return;
       }
 
-      await fetch('/api/auth/login-log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), success: true, userId: data.user.id }),
-      });
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', data.user.id)
-        .single();
-
-      const roleRedirects: Record<string, string> = {
-        admin: '/admin/dashboard',
-        employee: '/employee/dashboard',
-        client: '/client/dashboard',
-      };
-
-      router.push(roleRedirects[profile?.role ?? 'client'] ?? '/client/dashboard');
+      // Successful login -> route to user's portal
+      router.push(data.redirectUrl || '/');
       router.refresh();
     } catch {
-      setError('An unexpected error occurred. Please try again.');
+      setError('Unable to connect to the authentication service. Please check your network and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -69,6 +51,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
+        {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex h-14 w-14 rounded-2xl bg-teal-500 items-center justify-center mb-4 shadow-lg">
             <span className="text-white font-bold text-2xl">Z</span>
@@ -77,10 +60,11 @@ export default function LoginPage() {
           <p className="text-slate-400 text-sm mt-1">Sign in to your account</p>
         </div>
 
+        {/* Card */}
         <div className="bg-white rounded-2xl shadow-2xl p-8">
           <form onSubmit={handleLogin} className="space-y-5">
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
+              <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3 leading-relaxed">
                 {error}
               </div>
             )}
@@ -141,6 +125,7 @@ export default function LoginPage() {
             </Button>
           </form>
 
+          {/* Demo accounts hint */}
           <div className="mt-6 pt-6 border-t border-slate-100">
             <p className="text-xs text-slate-500 text-center mb-3 font-medium uppercase tracking-wider">Demo Accounts</p>
             <div className="space-y-2 text-xs text-slate-500">
