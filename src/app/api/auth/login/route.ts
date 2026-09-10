@@ -12,22 +12,33 @@ const ROLE_REDIRECTS: Record<UserRole, string> = {
   client: '/client/dashboard',
 };
 
+const DEMO_CREDENTIALS: Record<string, { role: UserRole; name: string }> = {
+  'admin@zenva.test': { role: 'admin', name: 'Alex Rivera' },
+  'employee@zenva.test': { role: 'employee', name: 'Maria Santos' },
+  'client@zenva.test': { role: 'client', name: 'Juan Cruz' },
+};
+
 export async function POST(request: NextRequest) {
   try {
     const { email, password } = await request.json();
-    const cleanEmail = (email || '').trim();
+    const cleanEmail = (email || '').trim().toLowerCase();
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+    const cookieStore = await cookies();
+    const userAgent = request.headers.get('user-agent') ?? undefined;
+    const ip = request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? undefined;
+
+    // Check if credentials are present
     if (!supabaseUrl || !supabaseAnonKey) {
       return NextResponse.json(
-        { error: 'Supabase credentials are not configured on Vercel yet. Please check your project settings.' },
+        { error: 'Supabase credentials are not yet configured on Vercel. Please add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel Settings.' },
         { status: 500 }
       );
     }
 
-    const cookieStore = await cookies();
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
       cookies: {
         getAll() {
@@ -45,15 +56,58 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    let authData: { user: { id: string; email?: string } | null } | null = null;
+
+    // 1. Attempt standard signIn
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
       email: cleanEmail,
       password,
     });
 
-    const userAgent = request.headers.get('user-agent') ?? undefined;
-    const ip = request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? undefined;
+    if (!signInError && signInData.user) {
+      authData = signInData;
+    } else if (serviceRoleKey && DEMO_CREDENTIALS[cleanEmail]) {
+      // 2. If it's a demo account and signIn failed, auto-provision it on-demand via service role!
+      try {
+        const adminClient = createServerClient(supabaseUrl, serviceRoleKey, {
+          cookies: { getAll: () => [], setAll: () => {} },
+        });
 
-    if (authError || !authData.user) {
+        const demoMeta = DEMO_CREDENTIALS[cleanEmail];
+        const { data: newUserData, error: createError } = await adminClient.auth.admin.createUser({
+          email: cleanEmail,
+          password,
+          email_confirm: true,
+          user_metadata: { full_name: demoMeta.name, role: demoMeta.role },
+        });
+
+        const targetId = newUserData?.user?.id;
+
+        if (targetId) {
+          // Ensure profile
+          await adminClient.from('profiles').upsert({
+            id: targetId,
+            full_name: demoMeta.name,
+            role: demoMeta.role,
+            status: 'active',
+            updated_at: new Date().toISOString(),
+          });
+
+          // Now sign in
+          const retry = await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password,
+          });
+          if (retry.data.user) {
+            authData = retry.data;
+          }
+        }
+      } catch (e) {
+        console.error('[Auto-provision error]:', e);
+      }
+    }
+
+    if (!authData || !authData.user) {
       // Log failed attempt
       await recordActivity({
         userId: '00000000-0000-0000-0000-000000000000',
@@ -63,11 +117,11 @@ export async function POST(request: NextRequest) {
         status: 'failed',
         ipAddress: ip,
         userAgent,
-        metadata: { attempted_email: cleanEmail, error: authError?.message },
+        metadata: { attempted_email: cleanEmail, error: signInError?.message },
       });
 
       return NextResponse.json(
-        { error: authError?.message || 'Invalid email or password' },
+        { error: signInError?.message || 'Invalid email or password' },
         { status: 401 }
       );
     }
@@ -96,7 +150,7 @@ export async function POST(request: NextRequest) {
       .eq('id', authData.user.id)
       .single();
 
-    const role = (profile?.role as UserRole) || 'client';
+    const role = (profile?.role as UserRole) || DEMO_CREDENTIALS[cleanEmail]?.role || 'client';
     const redirectUrl = ROLE_REDIRECTS[role] || '/client/dashboard';
 
     return NextResponse.json({
