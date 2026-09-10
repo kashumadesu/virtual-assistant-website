@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     // Check if credentials are present
     if (!supabaseUrl || !supabaseAnonKey) {
       return NextResponse.json(
-        { error: 'Supabase credentials are not yet configured on Vercel. Please add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel Settings.' },
+        { error: 'Supabase credentials are not yet configured in your Vercel Project Settings. Please add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel.' },
         { status: 500 }
       );
     }
@@ -67,38 +67,61 @@ export async function POST(request: NextRequest) {
     if (!signInError && signInData.user) {
       authData = signInData;
     } else if (serviceRoleKey && DEMO_CREDENTIALS[cleanEmail]) {
-      // 2. If it's a demo account and signIn failed, auto-provision it on-demand via service role!
+      // 2. If it's a demo account and signIn failed, auto-provision or update password via service role!
       try {
         const adminClient = createServerClient(supabaseUrl, serviceRoleKey, {
           cookies: { getAll: () => [], setAll: () => {} },
         });
 
         const demoMeta = DEMO_CREDENTIALS[cleanEmail];
-        const { data: newUserData, error: createError } = await adminClient.auth.admin.createUser({
-          email: cleanEmail,
-          password,
-          email_confirm: true,
-          user_metadata: { full_name: demoMeta.name, role: demoMeta.role },
-        });
+        let targetId: string | undefined;
 
-        const targetId = newUserData?.user?.id;
+        // Check if user already exists in auth.users
+        const { data: listData } = await adminClient.auth.admin.listUsers();
+        const existing = listData?.users?.find((u) => u.email?.toLowerCase() === cleanEmail);
 
-        if (targetId) {
-          // Ensure profile
-          await adminClient.from('profiles').upsert({
-            id: targetId,
-            full_name: demoMeta.name,
-            role: demoMeta.role,
-            status: 'active',
-            updated_at: new Date().toISOString(),
+        if (existing) {
+          targetId = existing.id;
+          // Update password and confirm email
+          await adminClient.auth.admin.updateUserById(existing.id, {
+            password,
+            email_confirm: true,
+            user_metadata: { full_name: demoMeta.name, role: demoMeta.role },
+          });
+        } else {
+          // Create new user
+          const { data: newUserData, error: createError } = await adminClient.auth.admin.createUser({
+            email: cleanEmail,
+            password,
+            email_confirm: true,
+            user_metadata: { full_name: demoMeta.name, role: demoMeta.role },
           });
 
-          // Now sign in
+          if (!createError && newUserData?.user) {
+            targetId = newUserData.user.id;
+          }
+        }
+
+        if (targetId) {
+          // Ensure profile exists in profiles table
+          try {
+            await adminClient.from('profiles').upsert({
+              id: targetId,
+              full_name: demoMeta.name,
+              role: demoMeta.role,
+              status: 'active',
+              updated_at: new Date().toISOString(),
+            });
+          } catch (profileError) {
+            console.error('[Profile Upsert Note]:', profileError);
+          }
+
+          // Retry signIn now that password/email_confirm are guaranteed
           const retry = await supabase.auth.signInWithPassword({
             email: cleanEmail,
             password,
           });
-          if (retry.data.user) {
+          if (retry.data?.user) {
             authData = retry.data;
           }
         }
@@ -108,49 +131,65 @@ export async function POST(request: NextRequest) {
     }
 
     if (!authData || !authData.user) {
-      // Log failed attempt
-      await recordActivity({
-        userId: '00000000-0000-0000-0000-000000000000',
-        action: ACTIONS.FAILED_LOGIN,
-        module: MODULES.AUTH,
-        description: `Failed login attempt for ${cleanEmail}`,
-        status: 'failed',
-        ipAddress: ip,
-        userAgent,
-        metadata: { attempted_email: cleanEmail, error: signInError?.message },
-      });
+      // Log failed attempt safely
+      try {
+        await recordActivity({
+          userId: '00000000-0000-0000-0000-000000000000',
+          action: ACTIONS.FAILED_LOGIN,
+          module: MODULES.AUTH,
+          description: `Failed login attempt for ${cleanEmail}`,
+          status: 'failed',
+          ipAddress: ip,
+          userAgent,
+          metadata: { attempted_email: cleanEmail, error: signInError?.message },
+        });
+      } catch (logErr) {
+        console.error('[Activity Log Note]:', logErr);
+      }
 
       return NextResponse.json(
-        { error: signInError?.message || 'Invalid email or password' },
+        { error: signInError?.message || 'Invalid email or password. Please verify the account exists in Supabase.' },
         { status: 401 }
       );
     }
 
-    // Log successful login
-    await recordActivity({
-      userId: authData.user.id,
-      action: ACTIONS.LOGIN,
-      module: MODULES.AUTH,
-      description: 'Successful login',
-      status: 'success',
-      ipAddress: ip,
-      userAgent,
-    });
+    // Log successful login safely
+    try {
+      await recordActivity({
+        userId: authData.user.id,
+        action: ACTIONS.LOGIN,
+        module: MODULES.AUTH,
+        description: 'Successful login',
+        status: 'success',
+        ipAddress: ip,
+        userAgent,
+      });
 
-    // Update last_active_at on profile
-    await supabase
-      .from('profiles')
-      .update({ last_active_at: new Date().toISOString() })
-      .eq('id', authData.user.id);
+      // Update last_active_at on profile
+      await supabase
+        .from('profiles')
+        .update({ last_active_at: new Date().toISOString() })
+        .eq('id', authData.user.id);
+    } catch (actErr) {
+      console.error('[Post-login activity note]:', actErr);
+    }
 
     // Fetch user profile to determine role destination
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', authData.user.id)
-      .single();
+    let role = DEMO_CREDENTIALS[cleanEmail]?.role || 'client';
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', authData.user.id)
+        .single();
 
-    const role = (profile?.role as UserRole) || DEMO_CREDENTIALS[cleanEmail]?.role || 'client';
+      if (profile?.role) {
+        role = profile.role as UserRole;
+      }
+    } catch (profFetchErr) {
+      console.error('[Profile fetch note]:', profFetchErr);
+    }
+
     const redirectUrl = ROLE_REDIRECTS[role] || '/client/dashboard';
 
     return NextResponse.json({
