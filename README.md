@@ -84,12 +84,30 @@ Every meaningful action is logged to `activity_logs`:
 
 Admins can filter logs by: User, Role, Action, Module, Date range, Search.
 
-## Deployment (Vercel)
+## Deployment to Vercel
 
-1. Push to GitHub
-2. Import repo in [vercel.com](https://vercel.com)
-3. Add environment variables
-4. Deploy
+The application is fully configured and ready for one-click or Git-integrated hosting on **Vercel**.
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fkashumadesu%2Fvirtual-assistant-website&env=NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY)
+
+### Option A: Automatic Git Integration (Recommended)
+1. Go to [vercel.com](https://vercel.com) and log in.
+2. Click **Add New...** → **Project**.
+3. Select and import your GitHub repository: `kashumadesu/virtual-assistant-website`.
+4. Framework Preset will automatically detect **Next.js** (configured via `vercel.json`).
+5. In the **Environment Variables** section, enter the 3 keys from your Supabase project:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+6. Click **Deploy**. Vercel will build and assign you a live production URL with automatic HTTPS and continuous deployment on every `git push`.
+
+### Option B: Deploy via Vercel CLI
+```bash
+# Link and deploy to Vercel directly from the terminal
+npx vercel
+# Follow the interactive prompts, then deploy to production:
+npx vercel --prod
+```
 
 ## Project Structure
 
